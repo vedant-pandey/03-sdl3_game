@@ -1,27 +1,62 @@
+const sdl3 = @import("sdl3");
 const std = @import("std");
-const powder_toy = @import("powder_toy");
+
+const fps = 60;
+
+const SDLState = struct {
+    window: *sdl3.video.Window,
+    renderer: *sdl3.render.Renderer,
+};
 
 pub fn main() !void {
-    // Prints to stderr, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try powder_toy.bufferedPrint();
-}
+    const screen_width = 640;
+    const screen_height = 480;
+    defer sdl3.shutdown();
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+    const init_flags = sdl3.InitFlags{ .video = true };
+    try sdl3.init(init_flags);
+    defer sdl3.quit(init_flags);
 
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
+    var window = sdl3.video.Window.init("Hello SDL3", screen_width, screen_height, .{ .always_on_top = true }) catch {
+        try sdl3.message_box.showSimple(.{ .error_dialog = true }, "Error", "Error creating window", null);
+        return error.SDLWindowInitFailed;
     };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+    defer window.deinit();
+
+    var renderer = sdl3.render.Renderer.init(window, null) catch {
+        try sdl3.message_box.showSimple(.{ .error_dialog = true }, "Error", "Error creating window", null);
+        return error.SDLWindowInitFailed;
+    };
+    defer renderer.deinit();
+    var state: SDLState = .{
+        .window = &window,
+        .renderer = &renderer,
+    };
+
+    var fps_capper = sdl3.extras.FramerateCapper(f32){ .mode = .{ .limited = fps } };
+
+    var quit = false;
+    _ = &quit;
+    while (!quit) {
+        const dt = fps_capper.delay();
+        _ = dt;
+
+        while (sdl3.events.poll()) |event| {
+            switch (event) {
+                .quit => quit = true,
+                .terminating => quit = true,
+                .key_down => {
+                    if (event.key_down.key.? == .q) {
+                        quit = true;
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // 128, 30, 255
+        try state.renderer.setDrawColor(.{ .r = 128, .g = 30, .b = 255, .a = 255 });
+        try state.renderer.clear();
+        try state.renderer.present();
+    }
 }
