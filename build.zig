@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
 
         // Lib options.
         // .callbacks = false,
-        // .ext_image = false,
+        .ext_image = true,
         // .ext_net = false,
         // .ext_ttf = false,
         // .log_message_stack_size = 1024,

@@ -3,22 +3,24 @@ const std = @import("std");
 
 const fps = 60;
 
-const SDLState = struct {
+const GameState = struct {
     window: *sdl3.video.Window,
     renderer: *sdl3.render.Renderer,
+    quit: bool = false,
 };
 
 pub fn main() !void {
-    const screen_width = 1521;
-    const screen_height = 1375;
+    var screenWidth: i32 = 1521;
+    var screenHeight: i32 = 1375;
 
     defer sdl3.shutdown();
 
+    // Initial config Start
     const init_flags = sdl3.InitFlags{ .video = true };
     try sdl3.init(init_flags);
     defer sdl3.quit(init_flags);
 
-    var window = sdl3.video.Window.init("Hello SDL3", screen_width, screen_height, .{ .always_on_top = true, .resizable = false }) catch {
+    var window = sdl3.video.Window.init("Hello SDL3", @intCast(screenWidth), @intCast(screenHeight), .{ .always_on_top = true }) catch {
         try sdl3.message_box.showSimple(.{ .error_dialog = true }, "Error", "Error creating window", null);
         return error.SDLWindowInitFailed;
     };
@@ -29,7 +31,7 @@ pub fn main() !void {
         return error.SDLWindowInitFailed;
     };
     defer renderer.deinit();
-    const state: SDLState = .{
+    var state: GameState = .{
         .window = &window,
         .renderer = &renderer,
     };
@@ -37,37 +39,58 @@ pub fn main() !void {
     try state.window.raise();
     const displays = try sdl3.video.getDisplays();
     if (displays.len > 1) {
-        const k = try displays[1].getBounds();
-
-        try state.window.setPosition(.{ .absolute = k.x }, .{ .absolute = k.y });
+        const display2 = try displays[1].getBounds();
+        try state.window.setPosition(.{ .absolute = display2.x }, .{ .absolute = display2.y });
     }
+    // Initial config End
 
-    var fps_capper = sdl3.extras.FramerateCapper(f32){ .mode = .{ .limited = fps } };
+    // Configuration
+    const lWidth = 640;
+    const lHeight = 320;
+    state.window.setResizable(true) catch unreachable;
+    try state.renderer.setLogicalPresentation(lWidth, lHeight, .letter_box);
 
-    var quit = false;
-    _ = &quit;
-    while (!quit) {
-        const dt = fps_capper.delay();
-        _ = dt;
+    // Load assets
+    const idleTex = try sdl3.image.loadTexture(state.renderer.*, "data/idle.png");
+    defer idleTex.deinit();
 
+    try idleTex.setScaleMode(.nearest);
+
+    // Game loop
+    while (!state.quit) {
         while (sdl3.events.poll()) |event| {
             switch (event) {
-                .quit => quit = true,
-                .terminating => quit = true,
+                .quit => state.quit = true,
+                .terminating => state.quit = true,
                 .key_down => {
                     if (event.key_down.key.? == .q) {
-                        quit = true;
+                        state.quit = true;
                     }
                 },
                 .window_resized => {
-                    std.debug.print("{} {}\n", .{ event.window_resized.height, event.window_resized.width });
+                    screenWidth = event.window_resized.width;
+                    screenHeight = event.window_resized.height;
                 },
                 else => {},
             }
         }
 
-        try state.renderer.setDrawColor(.{ .r = 128, .g = 30, .b = 255, .a = 255 });
-        try state.renderer.clear();
-        try state.renderer.present();
+        state.renderer.setDrawColor(.{ .r = 128, .g = 30, .b = 255, .a = 255 }) catch unreachable;
+        state.renderer.clear() catch unreachable;
+        defer state.renderer.present() catch unreachable;
+
+        const src = sdl3.rect.FRect{
+            .x = 0,
+            .y = 0,
+            .w = 32,
+            .h = 32,
+        };
+        const dst = sdl3.rect.FRect{
+            .x = 0,
+            .y = 0,
+            .w = 32,
+            .h = 32,
+        };
+        try state.renderer.renderTexture(idleTex, src, dst);
     }
 }
