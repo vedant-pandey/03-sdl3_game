@@ -51,6 +51,8 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addImport("sdl3", sdl3.module("sdl3"));
+    const zmath = b.dependency("zmath", .{});
+    exe.root_module.addImport("zmath", zmath.module("root"));
 
     b.installArtifact(exe);
 
