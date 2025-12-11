@@ -23,7 +23,7 @@ const Tile = enum {
     brick,
 };
 
-const SdlState = struct {
+const AppState = struct {
     window: sdl.video.Window = undefined,
     renderer: sdl.render.Renderer = undefined,
     quit: bool = false,
@@ -31,7 +31,7 @@ const SdlState = struct {
     height: i32 = 0,
     lWidth: usize = 0,
     lHeight: usize = 0,
-    keys: []const bool,
+    keys: []const bool = undefined,
 };
 
 const GameState = struct {
@@ -67,11 +67,15 @@ const Resources = struct {
     textures: []sdl.render.Texture = undefined,
     texIdle: ?sdl.render.Texture = null,
     texRun: ?sdl.render.Texture = null,
+    texBrick: ?sdl.render.Texture = null,
+    texGrass: ?sdl.render.Texture = null,
+    texGround: ?sdl.render.Texture = null,
+    texPanel: ?sdl.render.Texture = null,
     len: usize = 0,
     cap: usize,
 
     const Self = @This();
-    pub fn loadTexture(self: *Self, state: SdlState, filepath: [:0]const u8) !sdl.render.Texture {
+    pub fn loadTexture(self: *Self, state: AppState, filepath: [:0]const u8) !sdl.render.Texture {
         const tex = try sdl.image.loadTexture(state.renderer, filepath);
         self.textures[self.len] = tex;
         self.len += 1;
@@ -79,7 +83,7 @@ const Resources = struct {
         return tex;
     }
 
-    pub fn load(self: *Self, state: SdlState, allocator: std.mem.Allocator) !void {
+    pub fn load(self: *Self, state: AppState, allocator: std.mem.Allocator) !void {
         self.textures = allocator.alloc(sdl.render.Texture, self.cap) catch unreachable;
         self.playerAnims = allocator.alloc(animation.Animation, self.cap) catch unreachable;
         self.playerAnims[self.animPlayerIdle] = animation.Animation{
@@ -98,10 +102,26 @@ const Resources = struct {
             std.debug.print("error while loading texture {any}\n", .{err});
             return err;
         };
+        self.texBrick = self.loadTexture(state, "data/tiles/brick.png") catch |err| {
+            std.debug.print("error while loading texture {any}\n", .{err});
+            return err;
+        };
+        self.texGrass = self.loadTexture(state, "data/tiles/grass.png") catch |err| {
+            std.debug.print("error while loading texture {any}\n", .{err});
+            return err;
+        };
+        self.texGround = self.loadTexture(state, "data/tiles/ground.png") catch |err| {
+            std.debug.print("error while loading texture {any}\n", .{err});
+            return err;
+        };
+        self.texPanel = self.loadTexture(state, "data/tiles/panel.png") catch |err| {
+            std.debug.print("error while loading texture {any}\n", .{err});
+            return err;
+        };
     }
 
     pub fn unload(self: *Self, allocator: std.mem.Allocator) void {
-        for (self.textures) |*tex| {
+        for (self.textures[0..self.len]) |*tex| {
             tex.deinit();
         }
         allocator.free(self.textures);
@@ -110,15 +130,12 @@ const Resources = struct {
 };
 
 pub fn main() !void {
-    var state: SdlState = .{
+    var state: AppState = .{
         .width = 1521,
         .height = 1375,
         .lHeight = 320,
         .lWidth = 640,
-        .keys = sdl.keyboard.getState(),
     };
-
-    defer sdl.shutdown();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
@@ -130,10 +147,10 @@ pub fn main() !void {
 
     defer cleanup(&state);
 
-    // Game data
+    state.keys = sdl.keyboard.getState();
 
     // Load assets
-    var res: Resources = .{ .cap = 5 };
+    var res: Resources = .{ .cap = 6 };
     res.load(state, allocator) catch {};
     defer res.unload(allocator);
 
@@ -179,33 +196,31 @@ pub fn main() !void {
         state.renderer.clear() catch unreachable;
         defer state.renderer.present() catch unreachable;
 
-        for (0..gs.layers.len) |layerInd| {
-            for (0..gs.layerLens[layerInd]) |oInd| {
-                var obj = &gs.layers[layerInd][oInd];
+        for (gs.layers, 0..) |layer, layerInd| {
+            for (layer[0..layerInd]) |*obj| {
                 try update(&state, &gs, obj, &res, dt);
-                var anim = &obj.animations[obj.curAnim];
-                anim.step(dt);
+                if (obj.animations.len > 0) {
+                    obj.animations[obj.curAnim].step(dt);
+                }
             }
         }
 
         for (0..gs.layers.len) |layerInd| {
-            for (0..gs.layerLens[layerInd]) |oInd| {
-                const obj = &gs.layers[layerInd][oInd];
+            for (gs.layers[layerInd][0..gs.layerLens[layerInd]]) |*obj| {
                 try drawObject(&state, &gs, obj, dt);
             }
         }
     }
 }
 
-const init_flags = sdl.InitFlags{ .video = true };
-pub fn cleanup(state: *SdlState) void {
-    defer sdl.quit(init_flags);
-    state.window.deinit();
+pub fn cleanup(state: *AppState) void {
     state.renderer.deinit();
+    state.window.deinit();
+    sdl.shutdown();
 }
 
-pub fn initializeGame(state: *SdlState) bool {
-    sdl.init(init_flags) catch {
+pub fn initializeGame(state: *AppState) bool {
+    sdl.init(.{ .video = true }) catch {
         utils.showErrorDialog("Error initializing SDL");
         return false;
     };
@@ -246,13 +261,13 @@ pub fn initializeGame(state: *SdlState) bool {
     return true;
 }
 
-pub fn drawObject(state: *const SdlState, gs: *GameState, obj: *gameObject.GameObject, dt: f32) !void {
+pub fn drawObject(state: *const AppState, gs: *GameState, obj: *gameObject.GameObject, dt: f32) !void {
     const spriteSize: f32 = 32;
 
     _ = gs;
     _ = dt;
 
-    const srcX: f32 = obj.animations[obj.curAnim].currentFrame() * spriteSize;
+    const srcX: f32 = if (obj.animations.len > 0) obj.animations[obj.curAnim].currentFrame() * spriteSize else 0;
 
     const src = sdl.rect.FRect{
         .x = srcX,
@@ -270,8 +285,11 @@ pub fn drawObject(state: *const SdlState, gs: *GameState, obj: *gameObject.GameO
     try state.renderer.renderTextureRotated(obj.texture.?, src, dst, 0, null, .{ .horizontal = obj.direction == -1 });
 }
 
-pub fn update(state: *SdlState, gs: *GameState, obj: *gameObject.GameObject, res: *const Resources, dt: f32) !void {
-    _ = gs;
+pub fn update(state: *AppState, gs: *GameState, obj: *gameObject.GameObject, res: *Resources, dt: f32) !void {
+    if (obj.dynamic) {
+        obj.velocity += zm.Vec{ 0, 500, 0, 0 } * @as(zm.Vec, @splat(dt));
+    }
+
     switch (obj.data) {
         .player => {
             var dir: f32 = 0;
@@ -301,6 +319,7 @@ pub fn update(state: *SdlState, gs: *GameState, obj: *gameObject.GameObject, res
                         }
                     }
                 },
+
                 .running => {
                     if (dir == 0) {
                         obj.data.player.state = .idle;
@@ -315,26 +334,41 @@ pub fn update(state: *SdlState, gs: *GameState, obj: *gameObject.GameObject, res
             if (@abs(obj.velocity[0]) > obj.maxSpeedX) {
                 obj.velocity[0] = obj.maxSpeedX * dir;
             }
-            obj.position += obj.velocity * @as(@Vector(4, f32), @splat(dt));
         },
-        .level => {
-            std.debug.print("Level\n", .{});
-        },
-        .enemy => {
-            std.debug.print("Enemy\n", .{});
-        },
+        .level => {},
+        .enemy => {},
+    }
+    obj.position += obj.velocity * @as(@Vector(4, f32), @splat(dt));
+
+    for (gs.layers,0..) |layer, layerInd| {
+        for (layer[0..gs.layerLens[layerInd]]) |*objB| {
+            if (obj == objB) {
+                continue;
+            }
+            checkCollision(state, gs, res, obj, objB, dt);
+        }
     }
 }
 
-pub fn createTiles(state: *const SdlState, gs: *GameState, res: *const Resources) !void {
+pub fn createTiles(state: *const AppState, gs: *GameState, res: *const Resources) !void {
     var map: [MapRows][MapCols]Tile = .{.{.empty} ** MapCols} ** MapRows;
-    map[2][0] = .player;
+    map[0][0] = .player;
+    map[3][0] = .panel;
+    map[3][1] = .panel;
+    map[3][2] = .panel;
+    map[3][3] = .panel;
+    map[3][4] = .panel;
+    map[4][0] = .ground;
+    map[4][1] = .ground;
+    map[4][2] = .ground;
+    map[4][3] = .ground;
+    map[4][4] = .ground;
 
     for (map, 0..) |row, i| {
         for (row, 0..) |tile, j| {
             switch (tile) {
                 .player => {
-                    var player: gameObject.GameObject = .{
+                    try gs.addToLayer(CharacterLayerInd, gameObject.GameObject{
                         .texture = res.texIdle.?,
                         .animations = res.playerAnims,
                         .curAnim = res.animPlayerIdle,
@@ -347,17 +381,108 @@ pub fn createTiles(state: *const SdlState, gs: *GameState, res: *const Resources
                             0,
                             0,
                         },
-                    };
-                    try gs.addToLayer(CharacterLayerInd, player);
-                    _ = &player;
+                        .dynamic = true,
+                    });
                 },
                 .empty => {},
-                .brick => {},
+                .brick => {
+                    try gs.addToLayer(LevelLayerInd, gameObject.GameObject{
+                        .texture = res.texBrick,
+                        .position = .{
+                            @as(f32, @floatFromInt(j)) * TileSize,
+                            @as(f32, @floatFromInt(state.lHeight)) - @as(f32, @floatFromInt((MapRows - i) * TileSize)),
+                            0,
+                            0,
+                        },
+                    });
+                },
                 .enemy => {},
-                .grass => {},
-                .ground => {},
-                .panel => {},
+                .grass => {
+                    try gs.addToLayer(LevelLayerInd, gameObject.GameObject{
+                        .texture = res.texGrass,
+                        .position = .{
+                            @as(f32, @floatFromInt(j)) * TileSize,
+                            @as(f32, @floatFromInt(state.lHeight)) - @as(f32, @floatFromInt((MapRows - i) * TileSize)),
+                            0,
+                            0,
+                        },
+                    });
+                },
+                .ground => {
+                    try gs.addToLayer(LevelLayerInd, gameObject.GameObject{
+                        .texture = res.texGround,
+                        .position = .{
+                            @as(f32, @floatFromInt(j)) * TileSize,
+                            @as(f32, @floatFromInt(state.lHeight)) - @as(f32, @floatFromInt((MapRows - i) * TileSize)),
+                            0,
+                            0,
+                        },
+                    });
+                },
+                .panel => {
+                    try gs.addToLayer(LevelLayerInd, gameObject.GameObject{
+                        .texture = res.texPanel,
+                        .position = .{
+                            @as(f32, @floatFromInt(j)) * TileSize,
+                            @as(f32, @floatFromInt(state.lHeight)) - @as(f32, @floatFromInt((MapRows - i) * TileSize)),
+                            0,
+                            0,
+                        },
+                    });
+                },
             }
         }
+    }
+}
+
+pub fn checkCollision(state: *AppState, gs: *GameState, res: *Resources, f: *gameObject.GameObject, s: *gameObject.GameObject, dt: f32) void {
+    const rectF = sdl.rect.FRect{
+        .x = f.position[0],
+        .y = f.position[1],
+        .w = TileSize,
+        .h = TileSize,
+    };
+    const rectS = sdl.rect.FRect{
+        .x = s.position[0],
+        .y = s.position[1],
+        .w = TileSize,
+        .h = TileSize,
+    };
+    const overlap = sdl.rect.FRect.getIntersection(rectF, rectS);
+    if (overlap != null) {
+        resolveCollision(state, gs, res, f, s, &rectF, &rectS, &overlap.?, dt);
+    }
+}
+
+pub fn resolveCollision(state: *AppState, gs: *GameState, res: *Resources, f: *gameObject.GameObject, s: *gameObject.GameObject, rectF: *const sdl.rect.FRect, rectS: *const sdl.rect.FRect, overlap: *const sdl.rect.FRect, dt: f32) void {
+    _ = state;
+    _ = gs;
+    _ = res;
+    _ = dt;
+    _ = rectF;
+    _ = rectS;
+
+    switch (f.data) {
+        .player => {
+            switch (s.data) {
+                .level => {
+                    if (overlap.w < overlap.h) {
+                        if (f.velocity[0] > 0) {
+                            f.position[0] -= overlap.w;
+                        } else if (f.velocity[0] < 0) {
+                            f.position[0] += overlap.w;
+                        }
+                    } else {
+                        if (f.velocity[1] > 0) {
+                            f.position[1] -= overlap.h;
+                        } else if (f.velocity[1] < 0) {
+                            f.position[1] += overlap.h;
+                        }
+                    }
+                },
+                else => unreachable,
+            }
+        },
+        else => {},
     }
 }

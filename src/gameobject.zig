@@ -15,9 +15,10 @@ pub const GameObject = struct {
     velocity: zm.Vec = zm.Vec{0,0,0,0},
     acceleration:zm.Vec = zm.Vec{0,0,0,0},
     direction: f32 = 1,
-    animations: []animation.Animation = undefined,
+    animations: []animation.Animation = &[_]animation.Animation{},
     curAnim: usize = 0,
     texture: ?sdl3.render.Texture = null,
+    dynamic: bool = false,
 };
 
 pub const PlayerState = enum {
