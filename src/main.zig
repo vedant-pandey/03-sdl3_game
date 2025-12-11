@@ -1,5 +1,7 @@
 const sdl = @import("sdl3");
 const std = @import("std");
+const zm = @import("zmath");
+
 const animation = @import("animation.zig");
 const timer = @import("timer.zig");
 const gameObject = @import("gameobject.zig");
@@ -7,6 +9,19 @@ const utils = @import("utils.zig");
 
 const LevelLayerInd = 0;
 const CharacterLayerInd = 1;
+const MapRows = 5;
+const MapCols = 50;
+const TileSize = 32;
+
+const Tile = enum {
+    empty,
+    ground,
+    panel,
+    enemy,
+    player,
+    grass,
+    brick,
+};
 
 const SdlState = struct {
     window: sdl.video.Window = undefined,
@@ -14,8 +29,9 @@ const SdlState = struct {
     quit: bool = false,
     width: i32 = 0,
     height: i32 = 0,
-    lWidth: i32 = 0,
-    lHeight: i32 = 0,
+    lWidth: usize = 0,
+    lHeight: usize = 0,
+    keys: []const bool,
 };
 
 const GameState = struct {
@@ -46,9 +62,11 @@ const GameState = struct {
 
 const Resources = struct {
     animPlayerIdle: usize = 0,
+    animPlayerRun: usize = 1,
     playerAnims: []animation.Animation = undefined,
     textures: []sdl.render.Texture = undefined,
     texIdle: ?sdl.render.Texture = null,
+    texRun: ?sdl.render.Texture = null,
     len: usize = 0,
     cap: usize,
 
@@ -65,10 +83,18 @@ const Resources = struct {
         self.textures = allocator.alloc(sdl.render.Texture, self.cap) catch unreachable;
         self.playerAnims = allocator.alloc(animation.Animation, self.cap) catch unreachable;
         self.playerAnims[self.animPlayerIdle] = animation.Animation{
-            .timer = timer.Timer{ .length = 1.8 },
+            .timer = timer.Timer{ .length = 1.6 },
             .frameCount = 8,
         };
+        self.playerAnims[self.animPlayerRun] = animation.Animation{
+            .timer = timer.Timer{ .length = 0.5 },
+            .frameCount = 4,
+        };
         self.texIdle = self.loadTexture(state, "data/idle.png") catch |err| {
+            std.debug.print("error while loading texture {any}\n", .{err});
+            return err;
+        };
+        self.texRun = self.loadTexture(state, "data/run.png") catch |err| {
             std.debug.print("error while loading texture {any}\n", .{err});
             return err;
         };
@@ -89,6 +115,7 @@ pub fn main() !void {
         .height = 1375,
         .lHeight = 320,
         .lWidth = 640,
+        .keys = sdl.keyboard.getState(),
     };
 
     defer sdl.shutdown();
@@ -104,7 +131,6 @@ pub fn main() !void {
     defer cleanup(&state);
 
     // Game data
-    // const keyStates = sdl.keyboard.getState();
 
     // Load assets
     var res: Resources = .{ .cap = 5 };
@@ -116,17 +142,7 @@ pub fn main() !void {
         utils.showErrorDialog("Unable to initialize game state");
         return error.GameStateInitFailed;
     };
-    var player: gameObject.GameObject = .{
-        .type = .player,
-        .texture = res.texIdle.?,
-        .animations = res.playerAnims,
-        .curAnim = res.animPlayerIdle,
-    };
-
-    try gs.addToLayer(CharacterLayerInd, player);
-
-    _ = &player;
-    _ = &gs;
+    try createTiles(&state, &gs, &res);
 
     var prevTime = sdl.c.SDL_GetTicks();
     // Game loop
@@ -135,7 +151,7 @@ pub fn main() !void {
         defer {
             const en = sdl.timer.getPerformanceCounter();
             const elapsedTime = (@as(f32, @floatFromInt(en - st)) * 1000.0) / @as(f32, @floatFromInt(sdl.timer.getPerformanceFrequency()));
-            const fps = 1000.0 / elapsedTime;
+            const fps = @trunc(1000.0 / elapsedTime);
             std.debug.print("FPS {}\n", .{fps});
         }
         const nowTime = sdl.c.SDL_GetTicks();
@@ -165,7 +181,8 @@ pub fn main() !void {
 
         for (0..gs.layers.len) |layerInd| {
             for (0..gs.layerLens[layerInd]) |oInd| {
-                const obj = &gs.layers[layerInd][oInd];
+                var obj = &gs.layers[layerInd][oInd];
+                try update(&state, &gs, obj, &res, dt);
                 var anim = &obj.animations[obj.curAnim];
                 anim.step(dt);
             }
@@ -251,4 +268,96 @@ pub fn drawObject(state: *const SdlState, gs: *GameState, obj: *gameObject.GameO
     };
 
     try state.renderer.renderTextureRotated(obj.texture.?, src, dst, 0, null, .{ .horizontal = obj.direction == -1 });
+}
+
+pub fn update(state: *SdlState, gs: *GameState, obj: *gameObject.GameObject, res: *const Resources, dt: f32) !void {
+    _ = gs;
+    switch (obj.data) {
+        .player => {
+            var dir: f32 = 0;
+            if (state.keys[@intFromEnum(sdl.Scancode.a)]) {
+                dir += -1;
+            }
+            if (state.keys[@intFromEnum(sdl.Scancode.d)]) {
+                dir += 1;
+            }
+            obj.direction = dir;
+
+            switch (obj.data.player.state) {
+                .idle => {
+                    if (dir != 0) {
+                        obj.data.player.state = .running;
+                        obj.texture = res.texRun;
+                        obj.curAnim = res.animPlayerRun;
+                    } else {
+                        if (obj.velocity[0] != 0) {
+                            const factor: f32 = if (obj.velocity[0] > 0) -1.5 else 1.5;
+                            const amount = factor * obj.acceleration[0] * dt;
+                            if (@abs(obj.velocity[0]) < @abs(amount)) {
+                                obj.velocity[0] = 0;
+                            } else {
+                                obj.velocity[0] += amount;
+                            }
+                        }
+                    }
+                },
+                .running => {
+                    if (dir == 0) {
+                        obj.data.player.state = .idle;
+                        obj.texture = res.texIdle;
+                        obj.curAnim = res.animPlayerIdle;
+                    }
+                },
+                .jumping => {},
+            }
+            // acceleration
+            obj.velocity += obj.acceleration * @as(@Vector(4, f32), @splat(dir * dt));
+            if (@abs(obj.velocity[0]) > obj.maxSpeedX) {
+                obj.velocity[0] = obj.maxSpeedX * dir;
+            }
+            obj.position += obj.velocity * @as(@Vector(4, f32), @splat(dt));
+        },
+        .level => {
+            std.debug.print("Level\n", .{});
+        },
+        .enemy => {
+            std.debug.print("Enemy\n", .{});
+        },
+    }
+}
+
+pub fn createTiles(state: *const SdlState, gs: *GameState, res: *const Resources) !void {
+    var map: [MapRows][MapCols]Tile = .{.{.empty} ** MapCols} ** MapRows;
+    map[2][0] = .player;
+
+    for (map, 0..) |row, i| {
+        for (row, 0..) |tile, j| {
+            switch (tile) {
+                .player => {
+                    var player: gameObject.GameObject = .{
+                        .texture = res.texIdle.?,
+                        .animations = res.playerAnims,
+                        .curAnim = res.animPlayerIdle,
+                        .acceleration = zm.Vec{ 300, 0, 0, 0 },
+                        .maxSpeedX = 100,
+                        .data = .{ .player = .{} },
+                        .position = .{
+                            @as(f32, @floatFromInt(j)) * TileSize,
+                            @as(f32, @floatFromInt(state.lHeight)) - @as(f32, @floatFromInt((MapRows - i) * TileSize)),
+                            0,
+                            0,
+                        },
+                    };
+                    try gs.addToLayer(CharacterLayerInd, player);
+                    _ = &player;
+                },
+                .empty => {},
+                .brick => {},
+                .enemy => {},
+                .grass => {},
+                .ground => {},
+                .panel => {},
+            }
+        }
+    }
 }

@@ -41,8 +41,9 @@ pub fn build(b: *std.Build) void {
         // .image_enable_xv = true,
     });
 
+
     const exe = b.addExecutable(.{
-        .name = "_03_particle_sim",
+        .name = "_03_sdl3_game",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -53,6 +54,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("sdl3", sdl3.module("sdl3"));
     const zmath = b.dependency("zmath", .{});
     exe.root_module.addImport("zmath", zmath.module("root"));
+    const installAssembly = b.addInstallBinFile(exe.getEmittedAsm(), "assembly.s");
+    b.getInstallStep().dependOn(&installAssembly.step);
 
     b.installArtifact(exe);
 
